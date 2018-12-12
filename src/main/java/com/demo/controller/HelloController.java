@@ -4,7 +4,7 @@ import com.demo.mvcframework.annotation.Autowired;
 import com.demo.mvcframework.annotation.Controller;
 import com.demo.mvcframework.annotation.RequestMapping;
 import com.demo.mvcframework.annotation.RequestParam;
-import com.demo.service.impl.HelloService;
+import com.demo.service.HelloService;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;

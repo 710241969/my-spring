@@ -1,4 +1,4 @@
-package com.demo.service.impl;
+package com.demo.service;
 
 import com.demo.mvcframework.annotation.Service;
 import com.demo.service.BaseService;
