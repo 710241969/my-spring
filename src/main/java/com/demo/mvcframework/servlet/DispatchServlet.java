@@ -27,6 +27,7 @@ public class DispatchServlet extends HttpServlet {
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        //偷个懒
         this.doPost(req, resp);
     }
 
@@ -60,19 +61,22 @@ public class DispatchServlet extends HttpServlet {
             Class<?>[] paramTypeArray = handler.method.getParameterTypes();
             Object[] paramValueArray = new Object[paramTypeArray.length];
             Map<String, String[]> paramMap = req.getParameterMap(); // 请求携带的参数，key 是参数名，value 是参数的值字符串数组
+            // 遍历请求中携带的参数
             for (Map.Entry<String, String[]> param : paramMap.entrySet()) {
-                String value = Arrays.toString(param.getValue()).replaceAll("\\[|\\]", ""); // 将 value 的字符串中的两个中括号去掉 [] ，使用 | 替换多个字符
+                String value = Arrays.toString(param.getValue()).replaceAll("\\[|\\]", ""); // 将 value 的字符串中的两个中括号去掉 [] ，正则中使用 | 替换多个字符
                 if (!handler.paramIndexMap.containsKey(param.getKey())) {
                     continue;
                 }
                 int index = handler.paramIndexMap.get(param.getKey());
                 paramValueArray[index] = value;
             }
+            // 请求中传入的参数是没有 HttpServletRequest 和 HttpServletResponse 的，我们必须对这两个进行处理
             int reqIndex = handler.paramIndexMap.get(HttpServletRequest.class.getName());
             paramValueArray[reqIndex] = req;
             int resIndex = handler.paramIndexMap.get(HttpServletResponse.class.getName());
             paramValueArray[resIndex] = resp;
-            handler.method.invoke(handler.controller, paramValueArray); // 通过反射调用方法
+
+            handler.method.invoke(handler.controller, paramValueArray); // 最后通过反射调用方法
         } catch (Exception e) {
             e.printStackTrace();
             resp.getWriter().write("500 Server Internal Error");
@@ -115,58 +119,74 @@ public class DispatchServlet extends HttpServlet {
         if (ioc.isEmpty()) {
             return;
         }
+        // 遍历 IOC 容器
         for (Map.Entry<String, Object> entry : ioc.entrySet()) {
-            // 只针对 Controller
+            // 只针对 Controller 进行处理，否则都略过
             Class<?> clazz = entry.getValue().getClass();
             if (!clazz.isAnnotationPresent(Controller.class)) {
                 continue;
             }
             String baseUrl = "";
             if (clazz.isAnnotationPresent(RequestMapping.class)) {
-                // 类上使用了 RequestMapping 注解
+                // 首先如果类上使用了 RequestMapping 注解，那么 URL 从类上开始
                 RequestMapping requestMapping = clazz.getAnnotation(RequestMapping.class);
                 baseUrl = requestMapping.path();
             }
+            // 通过 getMethods 方法获取该类的方法
             Method[] methodArray = clazz.getMethods();
+            // 遍历方法，对加了 RequestMapping 的方法进行处理
             for (Method method : methodArray) {
                 if (!method.isAnnotationPresent(RequestMapping.class)) {
                     continue;
                 }
+                // 获取这个方法的 RequestMapping 注解，拿到注解的属性值
                 RequestMapping requestMapping = method.getAnnotation(RequestMapping.class);
-                String regex = (baseUrl + requestMapping.path()).toString().replaceAll("/+", "/");
+                String regex = (baseUrl + requestMapping.path()).replaceAll("/+", "/");
                 Pattern pattern = Pattern.compile(regex);
+                // Handler 是自定义的内嵌类，带有 URL 地址、类名和对应的 Controller 方法等等。
+                // handlerList 加入这个方法对应的 Handler
                 handlerList.add(new Handler(pattern, entry.getValue(), method));
             }
         }
     }
 
+    /**
+     * 遍历 IOC 容器中的对象，对加了 Autowired 注解的成员变量进行赋值
+     */
     private void doAutowired() {
         if (ioc.isEmpty()) {
             return;
         }
         // 依赖注入，给 ioc 容器里加了 Autowired 注解的字段赋值
         for (Map.Entry<String, Object> entry : ioc.entrySet()) {
+            // getDeclaredFields 方法获取类声明的所有变量，但不包括父类的变量
+            // 注意区分类似的 getFields 方法获取类的所有 public 变量，包括父类中的
             Field[] fieldArray = entry.getValue().getClass().getDeclaredFields();
+            // 遍历每个字段，对加了 Autowired 注解的进行处理
             for (Field field : fieldArray) {
                 if (!field.isAnnotationPresent(Autowired.class)) {
                     continue;
                 }
                 Autowired autowired = field.getAnnotation(Autowired.class);
-                String beanName = autowired.value().trim();
+                // 判断注解上是否使用了自定义的名字
+                String beanName = autowired.value().trim(); // 其实就是OC 容器的 key
                 if ("".equals(beanName)) {
+                    // 没有使用自定义名字，默认使用类名，首字母小写。
                     beanName = StringUtil.lowerCaseFirst(field.getType().getSimpleName());
                 }
-                field.setAccessible(true); // 通过反射，获取私有属性访问权限
+                field.setAccessible(true); // 通过反射，获取私有属性访问权限，保证下面能够赋值
                 try {
+                    // 通过 set 给字段赋值。方法的第一个参数应传入需要修改这个字段的对象，第二个参数传入要赋予的值
+                    // 所以第一个参数是当前遍历到的这个对象，第二个参数是 IOC 容器中 key 为这个名字的实例
                     field.set(entry.getValue(), ioc.get(beanName)); // 给注解了 Autowired 的类的字段，赋值为该字段类型的实例
                 } catch (Exception e) {
                     e.printStackTrace();
+                    // 异常继续处理，事实上应该抛出
                     continue;
                 }
 
             }
         }
-
     }
 
     /**
@@ -282,10 +302,10 @@ public class DispatchServlet extends HttpServlet {
 
 
     private class Handler {
-        private Pattern pattern; // url 匹配
+        private Pattern pattern; // url 正则匹配规则。
         private Object controller; // 方法对应的实例
         private Method method; // 方法
-        private Map<String, Integer> paramIndexMap; // 参数对应的顺序
+        private Map<String, Integer> paramIndexMap; // 参数对应的顺序映射 paramIndexMap<变量名，变量在所属方法中变量列表的下标>
 
         private Handler(Pattern pattern, Object controller, Method method) {
             this.pattern = pattern;
@@ -295,12 +315,17 @@ public class DispatchServlet extends HttpServlet {
             putParamIndexMapping(method);
         }
 
+        /**
+         * 处理加了 RequestParam 注解的参数
+         *
+         * @param method
+         */
         private void putParamIndexMapping(Method method) {
             // 获取加了 annotation 注解的参数
             Annotation[][] parameterAnnotationArray = method.getParameterAnnotations(); // 结果是一个二维数组，因为参数前可以添加多个注解
             // 遍历每个参数
             for (int i = 0, len = parameterAnnotationArray.length; i < len; i++) {
-                // 参数的每个注解
+                // 遍历参数的每个注解
                 for (Annotation annotation : parameterAnnotationArray[i]) {
                     // 找出注解了 RequestParam 的参数
                     if (annotation instanceof RequestParam) {
@@ -311,7 +336,8 @@ public class DispatchServlet extends HttpServlet {
                     }
                 }
             }
-            // 特殊处理 HttpServletRequest 和 HttpServletResponse
+            // 特殊处理 HttpServletRequest 和 HttpServletResponse 两个变量
+            // getParameterTypes 方法获取这个方法传入的参数类型列表
             Class<?>[] paramTypeArray = method.getParameterTypes();
             for (int i = 0, len = paramTypeArray.length; i < len; i++) {
                 Class<?> type = paramTypeArray[i];
